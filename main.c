@@ -18,12 +18,16 @@
 #define PAGE_MMIO_OFFSET  0xC000
 
 
-
+/*
 unsigned char code_buffer[] = {
   0xb8, 0x00, 0x00, 0xba, 0x02, 0x00, 0xe5, 0x18, 0x01, 0xd0, 0xe7, 0x17,
-  0x8b, 0x16, 0x00, 0x80, 0x01, 0xc2, 0x89, 0x16, 0x04, 0x80, 0xf4
-};
+  0x8b, 0x16, 0x00, 0x80, 0x01, 0xc2, 0x89, 0x16, 0x04, 0x80, 0x66, 0xb9,
+  0x00, 0x00, 0x00, 0x40, 0x66, 0xb8, 0x01, 0x00, 0x00, 0x00, 0x0f, 0x30,
+  0x66, 0xb8, 0xa0, 0x00, 0x00, 0x00, 0x0f, 0x01, 0xd9, 0x66, 0xb8, 0xa1,
+  0x00, 0x00, 0x00, 0x0f, 0x01, 0xd9, 0xf4
+};*/
 
+unsigned char* code_buffer = NULL;
 
 //unsigned char code_buffer[] = "\xb0\x61\xba\x17\x02\xee\xb0\x0a\xee\xba\x18\x02\xec\xf4";
 //"\xB0\x61\xBA\x17\x02\xEE\xB0\n\xEE\xF4";
@@ -38,7 +42,20 @@ int main(int argc,char** argv) {
         return 0;
     }
 
-    uint kvm_version = ioctl(kvm_handle, KVM_GET_API_VERSION, NULL);
+    FILE* code_file_handle = fopen("./emulator_code","rb");
+
+    fseek(code_file_handle,0,SEEK_END);
+
+    unsigned int code_file_size = ftell(code_file_handle);
+    code_buffer = (unsigned char*)malloc(code_file_size);
+
+    fseek(code_file_handle,0,SEEK_SET);
+    fread(code_buffer,code_file_size,1,code_file_handle);
+    fclose(code_file_handle);
+    
+    printf("code_buffer = %X\n",*(unsigned long*)code_buffer);
+
+    unsigned int kvm_version = ioctl(kvm_handle, KVM_GET_API_VERSION, NULL);
 
     printf("Current KVM VERSION:%d \n",kvm_version);
 
@@ -61,7 +78,7 @@ int main(int argc,char** argv) {
     };
 
     memset(code_memory,0,DEFAULT_CODE_MEMORY_SIZE);
-    memcpy(code_memory,&code_buffer,sizeof(code_buffer));
+    memcpy(code_memory,code_buffer,code_file_size);
     ioctl(vm_fd, KVM_SET_USER_MEMORY_REGION, &kvm_outside_region);
 
     unsigned char* mmio_memory = (unsigned char*)mmap(0, DEFAULT_MMIO_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_ANONYMOUS, -1, 0);
@@ -186,8 +203,11 @@ int main(int argc,char** argv) {
                             break;
                     }
 
-                    printf("KVM MMIO Write = 0x%X (%X) ;Data = %X \n",memory_address,memory_data_size,data);
-
+                    if (0x8004 == memory_address) {
+                        printf("KVM MMIO Output => %X \n",data);
+                    } else {
+                        printf("KVM MMIO Write = 0x%X (%X) ;Data = %X \n",memory_address,memory_data_size,data);
+                    }
                 } else {
                     if (0x8000 == memory_address) {
                         switch(memory_data_size) {
@@ -206,6 +226,16 @@ int main(int argc,char** argv) {
                 }
 
                 break;
+            } case KVM_EXIT_HYPERCALL: {  //  <- never execute ...
+                                          //  vmcall catch it inside kvm-vmx
+                                          //  see linux source:
+                                          //   https://github.com/torvalds/linux/blob/78d42025e5bb83f9071e4a60edf1567dd12ed9dc/arch/x86/kvm/vmx/vmx.c#L5143
+                                          //   https://github.com/torvalds/linux/blob/78d42025e5bb83f9071e4a60edf1567dd12ed9dc/arch/x86/kvm/x86.c#L8099
+                printf("KVM_EXIT_HYPERCALL === %X %X\n",
+                    run_mem->hypercall.args[0],
+                    run_mem->hypercall.args[1]
+                );
+
             } default:
                 printf("KVM-Exit Reason: %d\n",exit_reason);
         }
